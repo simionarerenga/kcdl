@@ -78,9 +78,22 @@ export default function ShedStockSection({ user, userProfile }) {
 
   useEffect(() => {
     if (!stationId) return;
+    const KEY = `farmers_${stationId}`;
+    // Hydrate from forage immediately so offline-added farmers appear in the picker
+    storageGet(KEY).then(v => {
+      if (v) try { setFarmers(JSON.parse(v)); } catch {}
+    });
     return onSnapshot(
       query(collection(db, 'farmers'), where('stationId', '==', stationId), orderBy('name')),
-      snap => setFarmers(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+      snap => {
+        const fbData = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        // Merge: keep locally-added farmers not yet in Firebase
+        setFarmers(prev => {
+          const fbIds     = new Set(fbData.map(f => f.id));
+          const localOnly = prev.filter(f => !fbIds.has(f.id));
+          return [...fbData, ...localOnly].sort((a,b) => a.name.localeCompare(b.name));
+        });
+      }
     );
   }, [stationId]);
 
