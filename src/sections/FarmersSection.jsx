@@ -87,7 +87,6 @@ function FarmerProfile({ farmer: init, onSaved, user }) {
     } catch (e) { console.warn('[FarmerProfile] queue failed:', e.message); }
     setSaving(false);
   }
-  }
 
   const LabelVal = ({ label, value, href, icon }) => (
     <div style={{ marginBottom: 14 }}>
