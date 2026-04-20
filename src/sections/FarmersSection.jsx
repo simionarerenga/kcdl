@@ -1,6 +1,6 @@
 // src/sections/FarmersSection.jsx
-import { useState, useEffect } from 'react';
-import { collection, addDoc, updateDoc, onSnapshot, query, where, orderBy
+import { useState, useEffect, useCallback } from 'react';
+import { collection, addDoc, updateDoc, onSnapshot, query, where, orderBy, getDocs
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { storageGet, storageSet } from '../utils/storage';
@@ -16,7 +16,7 @@ function genFarmerId(existing) {
   return `KI-${String(max + 1).padStart(3, '0')}`;
 }
 
-const gIcon = g => g === 'Male' ? '♂' : g === 'Female' ? '♀' : g ? '⚧' : '';
+const gIcon = g => g === 'Male' ? '♂' : g === 'Female' ? '♀' : '';
 
 /* ── shared style tokens ── */
 const th = { padding: '10px 12px', textAlign: 'left', fontWeight: 700, fontSize: '0.78rem', letterSpacing: '0.4px' };
@@ -129,7 +129,6 @@ function FarmerProfile({ farmer: init, onSaved, user }) {
           <option value="">— Select —</option>
           <option value="Male">♂ Male</option>
           <option value="Female">♀ Female</option>
-          <option value="Other">⚧ Other</option>
         </select>
 
         <label className="field-label">ID Card Number *</label>
@@ -224,7 +223,6 @@ function FarmerTransactions({ farmer }) {
       query(collection(db,'shedStock'), where('farmerId','==',farmer.id), orderBy('weighedAt','desc')),
       snap => { setWeighings(snap.docs.map(d=>({id:d.id,...d.data()}))); finish(); }, () => finish()
     );
-    // Query station shipments and filter for this farmer client-side
     const stId = farmer.stationId || '';
     const u3 = stId
       ? onSnapshot(
@@ -243,10 +241,7 @@ function FarmerTransactions({ farmer }) {
     ? new Date(iso).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})
     : '--';
 
-  // Build timeline events
   const events = [];
-
-  // Group issuances by date
   const byDate = {};
   issuances.forEach(i => {
     const d = i.issuedDate || fmtDate(i.issuedAt);
@@ -255,11 +250,9 @@ function FarmerTransactions({ farmer }) {
     else byDate[d].items.push(i);
   });
   Object.values(byDate).forEach(g => {
-    if (g.items.length)   events.push({ _ts:g.ts,                         _kind:'issue',  date:g.date, bags:g.items });
+    if (g.items.length)   events.push({ _ts:g.ts, _kind:'issue',  date:g.date, bags:g.items });
     if (g.returns.length) events.push({ _ts:g.returns[0].returnedAt||g.ts, _kind:'return', date:g.date, bags:g.returns });
   });
-
-  // Group weighings by date
   const wByDate = {};
   weighings.forEach(w => {
     const d = w.weighedDate || fmtDate(w.weighedAt);
@@ -270,13 +263,10 @@ function FarmerTransactions({ farmer }) {
   Object.values(wByDate).forEach(g =>
     events.push({ _ts:g.ts, _kind:'weigh', date:g.date, qualityBags:g.qualityBags, batches:g.batches })
   );
-
-  // Shipments
   shipments.forEach(sh => {
     const fb = (sh.bags||[]).filter(b=>b.farmerId===farmer.id);
     if (fb.length) events.push({ _ts:sh.shippedAt, _kind:'ship', date:sh.shipDate, vessel:sh.vesselName, bags:fb });
   });
-
   events.sort((a,b)=>(b._ts||'').localeCompare(a._ts||''));
 
   if (loading) return <div className="empty-state">Loading transactions...</div>;
@@ -378,18 +368,13 @@ function FarmerDetail({ farmer: init, onBack, onFarmerUpdated, user }) {
 
   return (
     <div style={{ paddingBottom: 60 }}>
-      {/* Breadcrumb */}
       <button onClick={onBack} type="button" style={backBtn}>← Farmers Registry</button>
-
-      {/* Name header */}
       <div style={{ fontWeight: 800, fontSize: '1.15rem', margin: '6px 0 14px' }}>
         {farmer.name}
         {gIcon(farmer.gender) && (
           <span style={{ fontSize: '0.95rem', color: '#007c91', marginLeft: 6 }}>{gIcon(farmer.gender)}</span>
         )}
       </div>
-
-      {/* Horizontal tab strip */}
       <div style={TAB_STRIP}>
         {TABS.map(t => (
           <button key={t.key} type="button" onClick={() => setTab(t.key)} style={tabBtn(tab === t.key)}>
@@ -397,7 +382,6 @@ function FarmerDetail({ farmer: init, onBack, onFarmerUpdated, user }) {
           </button>
         ))}
       </div>
-
       {tab === 'profile' && <FarmerProfile farmer={farmer} onSaved={handleSaved} user={user} />}
       {tab === 'transactions' && <FarmerTransactions farmer={farmer} />}
     </div>
@@ -406,52 +390,127 @@ function FarmerDetail({ farmer: init, onBack, onFarmerUpdated, user }) {
 
 /* ═══════════════ MAIN SECTION ═══════════════ */
 export default function FarmersSection({ user }) {
-  const [farmers, setFarmers]     = useState([]);
-  const [search, setSearch]       = useState('');
-  const [form, setForm]           = useState(EMPTY);
-  const [showForm, setShowForm]   = useState(false);
-  const [saving, setSaving]       = useState(false);
-  const [msg, setMsg]             = useState('');
-  const [loading, setLoading]     = useState(true);
-  const [selected, setSelected]   = useState(null);
+  const [farmers, setFarmers]         = useState([]);
+  const [search, setSearch]           = useState('');
+  const [form, setForm]               = useState(EMPTY);
+  const [showForm, setShowForm]       = useState(false);
+  const [saving, setSaving]           = useState(false);
+  const [msg, setMsg]                 = useState('');
+  const [loading, setLoading]         = useState(true);
+  const [selected, setSelected]       = useState(null);
+  // Duplicate ID card notification state
+  const [dupAlert, setDupAlert]       = useState(null); // { name, village, stationId }
 
   const stationId = user?.stationId || user?.uid;
+  const FARMERS_KEY = `farmers_${stationId}`;
 
+  // ── Load farmers: forage first, then merge with Firebase snapshots ──────────
   useEffect(() => {
     if (!stationId) return;
-    const KEY = `farmers_${stationId}`;
-    // Hydrate immediately from device storage (instant display before Firestore responds)
-    storageGet(KEY).then(v => {
+    storageGet(FARMERS_KEY).then(v => {
       if (v) try { setFarmers(JSON.parse(v)); setLoading(false); } catch {}
     });
     const q = query(collection(db,'farmers'), where('stationId','==',stationId), orderBy('name'));
     const unsub = onSnapshot(q, snap => {
-      const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      setFarmers(data);
+      const fbData = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      // Merge: keep any locally-added farmers not yet in Firebase
+      setFarmers(prev => {
+        const fbIds   = new Set(fbData.map(f => f.id));
+        const localOnly = prev.filter(f => !fbIds.has(f.id));
+        const merged  = [...fbData, ...localOnly].sort((a,b) => a.name.localeCompare(b.name));
+        storageSet(FARMERS_KEY, JSON.stringify(merged));
+        return merged;
+      });
       setLoading(false);
-      storageSet(KEY, JSON.stringify(data));
     });
     return unsub;
   }, [stationId]);
 
-  function flash(m) { setMsg(m); setTimeout(() => setMsg(''), 3000); }
+  // ── Check for pending duplicate ID card verifications when coming online ────
+  useEffect(() => {
+    if (!stationId) return;
+    const PENDING_KEY = `pendingCardChecks_${stationId}`;
+    const runChecks = async () => {
+      const raw = await storageGet(PENDING_KEY);
+      if (!raw) return;
+      const pending = JSON.parse(raw);
+      if (!pending.length) return;
+      const remaining = [];
+      for (const item of pending) {
+        try {
+          const snap = await getDocs(
+            query(collection(db,'farmers'), where('idCard','==',item.idCard))
+          );
+          const others = snap.docs
+            .map(d => ({ id: d.id, ...d.data() }))
+            .filter(f => f.id !== item.localId);
+          if (others.length > 0) {
+            const dup = others[0];
+            setDupAlert({
+              idCard:   item.idCard,
+              newName:  item.name,
+              dupName:  dup.name,
+              dupVillage: dup.village || '—',
+              dupStation: dup.stationId || '—',
+              sameStation: dup.stationId === stationId,
+            });
+          }
+        } catch {
+          remaining.push(item); // keep for next retry
+        }
+      }
+      await storageSet(PENDING_KEY, JSON.stringify(remaining));
+    };
+    if (navigator.onLine) runChecks();
+    window.addEventListener('online', runChecks);
+    return () => window.removeEventListener('online', runChecks);
+  }, [stationId]);
 
-  // Keep the local forage farmers list in sync when a farmer profile is edited
+  function flash(m) { setMsg(m); setTimeout(() => setMsg(''), 4000); }
+
   async function handleFarmerUpdated(updated) {
-    const KEY     = `farmers_${stationId}`;
     const newList = farmers.map(f => f.id === updated.id ? updated : f);
     setFarmers(newList);
-    await storageSet(KEY, JSON.stringify(newList));
+    await storageSet(FARMERS_KEY, JSON.stringify(newList));
   }
 
   async function handleSave() {
     if (!form.name.trim())   { flash('⚠️ Name is required.'); return; }
     if (!form.idCard.trim()) { flash('⚠️ ID Card number is required.'); return; }
+
+    const cardUpper = form.idCard.trim().toUpperCase();
+
+    // ── 1. Check forage for duplicate ID card ────────────────────────────────
+    const localDup = farmers.find(f => (f.idCard||'').toUpperCase() === cardUpper);
+    if (localDup) {
+      flash(`⚠️ ID Card ${cardUpper} is already registered to ${localDup.name}${localDup.village ? ' from ' + localDup.village : ''}.`);
+      return;
+    }
+
+    // ── 2. If online, check Firebase across ALL stations ─────────────────────
+    if (navigator.onLine) {
+      try {
+        const snap = await getDocs(
+          query(collection(db,'farmers'), where('idCard','==',cardUpper))
+        );
+        if (!snap.empty) {
+          const dup = snap.docs[0].data();
+          const loc = dup.village ? `${dup.village}` : '';
+          const sta = dup.stationId !== stationId ? ' (different station)' : ' (this station)';
+          flash(`⚠️ ID Card ${cardUpper} is already registered to ${dup.name}${loc ? ', ' + loc : ''}${sta}.`);
+          return;
+        }
+      } catch (e) {
+        console.warn('[FarmersSection] Firebase card check failed:', e.message);
+        // fall through and allow save — will be verified when online later
+      }
+    }
+
     setSaving(true);
     const id       = newDocId();
     const farmerId = genFarmerId(farmers);
     const data = {
-      name: form.name.trim(), idCard: form.idCard.trim(),
+      name: form.name.trim(), idCard: cardUpper,
       village: form.village.trim(), gender: form.gender,
       email: form.email.trim(), phone: form.phone.trim(),
       whatsapp: form.whatsapp.trim(), farmerId, stationId,
@@ -461,21 +520,30 @@ export default function FarmersSection({ user }) {
     };
     const newFarmer = { id, ...data };
 
-    // 1. Update forage + UI immediately (offline-first)
-    const KEY     = `farmers_${stationId}`;
-    const newList = [...farmers, newFarmer].sort((a, b) => a.name.localeCompare(b.name));
+    // ── 3. Update forage + UI immediately ────────────────────────────────────
+    const newList = [...farmers, newFarmer].sort((a,b) => a.name.localeCompare(b.name));
     setFarmers(newList);
-    await storageSet(KEY, JSON.stringify(newList));
-
-    // 2. Close modal and flash
+    await storageSet(FARMERS_KEY, JSON.stringify(newList));
     setShowForm(false);
     setForm(EMPTY);
     flash('✅ Farmer registered.');
 
-    // 3. Queue Firebase write — will sync when online
+    // ── 4. Queue Firebase write ───────────────────────────────────────────────
     try {
       await queueWrite({ type: 'setDoc', col: 'farmers', id, data });
     } catch (e) { flash('❌ Queue error: ' + e.message); }
+
+    // ── 5. If offline, queue a pending card verification for when online ──────
+    if (!navigator.onLine) {
+      try {
+        const PENDING_KEY = `pendingCardChecks_${stationId}`;
+        const raw     = await storageGet(PENDING_KEY);
+        const pending = raw ? JSON.parse(raw) : [];
+        pending.push({ localId: id, idCard: cardUpper, name: data.name });
+        await storageSet(PENDING_KEY, JSON.stringify(pending));
+      } catch {}
+    }
+
     setSaving(false);
   }
 
@@ -487,7 +555,6 @@ export default function FarmersSection({ user }) {
 
   /* ─ Farmer detail screen ─ */
   if (selected) {
-    // Keep selected in sync if it was updated externally
     const live = farmers.find(f => f.id === selected.id) || selected;
     return (
       <section>
@@ -502,11 +569,34 @@ export default function FarmersSection({ user }) {
     <section>
       <h2 className="section-title">👩‍🌾 Farmers Registry</h2>
 
-      {/* Compact inline stat badges */}
+      {/* Duplicate ID card alert */}
+      {dupAlert && (
+        <div style={{
+          background: '#fff3cd', border: '1.5px solid #ffc107', borderRadius: 12,
+          padding: '14px 16px', marginBottom: 16,
+        }}>
+          <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#856404', marginBottom: 6 }}>
+            ⚠️ Duplicate ID Card Detected
+          </div>
+          <div style={{ fontSize: '0.84rem', color: '#533f03', lineHeight: 1.6 }}>
+            The ID card <strong>{dupAlert.idCard}</strong> you registered for <strong>{dupAlert.newName}</strong> is
+            already in use by <strong>{dupAlert.dupName}</strong>
+            {dupAlert.dupVillage !== '—' ? ` from ${dupAlert.dupVillage}` : ''}
+            {dupAlert.sameStation ? ' at this station' : ' at a different station'}.
+            Please verify and correct the record.
+          </div>
+          <button type="button" onClick={() => setDupAlert(null)}
+            style={{ marginTop: 10, background: '#856404', color: '#fff', border: 'none',
+              borderRadius: 8, padding: '6px 14px', fontWeight: 700, fontSize: '0.82rem', cursor: 'pointer' }}>
+            Dismiss
+          </button>
+        </div>
+      )}
+
       <div style={{ display:'flex', gap:10, marginBottom:18, flexWrap:'wrap' }}>
         {[
-          { value: farmers.length,   label: 'Registered', grad: 'linear-gradient(135deg,#007c91,#339bbf)' },
-          { value: filtered.length,  label: 'Shown',      grad: 'linear-gradient(135deg,#2e7d32,#66bb6a)' },
+          { value: farmers.length,  label: 'Registered', grad: 'linear-gradient(135deg,#007c91,#339bbf)' },
+          { value: filtered.length, label: 'Shown',      grad: 'linear-gradient(135deg,#2e7d32,#66bb6a)' },
         ].map(s => (
           <div key={s.label} style={{
             background: s.grad, borderRadius: 12, padding: '8px 16px', color: '#fff',
@@ -587,7 +677,6 @@ export default function FarmersSection({ user }) {
               <option value="">— Select —</option>
               <option value="Male">♂ Male</option>
               <option value="Female">♀ Female</option>
-              <option value="Other">⚧ Other</option>
             </select>
 
             <label className="field-label">ID Card Number *</label>
@@ -616,7 +705,7 @@ export default function FarmersSection({ user }) {
                 onClick={() => { setShowForm(false); setForm(EMPTY); }} type="button">Cancel</button>
               <button className="btn-primary" style={{ flex:1 }}
                 onClick={handleSave} disabled={saving} type="button">
-                {saving ? 'Saving…' : 'Save'}
+                {saving ? 'Checking…' : 'Save'}
               </button>
             </div>
           </div>
