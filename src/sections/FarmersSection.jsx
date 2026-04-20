@@ -523,6 +523,7 @@ export default function FarmersSection({ user }) {
     // ── 3. Update forage + UI immediately ────────────────────────────────────
     const newList = [...farmers, newFarmer].sort((a,b) => a.name.localeCompare(b.name));
     setFarmers(newList);
+    setLoading(false);   // ← clear any lingering loading state so the list renders immediately
     await storageSet(FARMERS_KEY, JSON.stringify(newList));
     setShowForm(false);
     setForm(EMPTY);
