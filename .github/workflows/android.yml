@@ -1,0 +1,104 @@
+name: Android APK Build
+
+on:
+  workflow_dispatch:
+
+env:
+  ANDROID_API_LEVEL:   "34"
+  ANDROID_BUILD_TOOLS: "34.0.0"
+  NODE_VERSION:        "20"
+  JAVA_VERSION:        "17"
+
+jobs:
+  build-android:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Set up JDK ${{ env.JAVA_VERSION }} (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK components
+        run: |
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-${{ env.ANDROID_API_LEVEL }}" \
+            "build-tools;${{ env.ANDROID_BUILD_TOOLS }}"
+
+      - name: Install npm dependencies
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+        run: npm install
+
+      - name: Build web assets
+        run: npm run build
+
+      - name: Add Capacitor Android platform
+        run: npx cap add android
+
+      - name: Capacitor sync
+        run: npx cap sync android
+
+      - name: Install app launcher icon
+        run: |
+          sudo apt-get install -y imagemagick > /dev/null 2>&1
+          ICON_SRC="android/app/src/main/res"
+
+          # Replace PNG icons in all densities
+          for entry in "mdpi:48" "hdpi:72" "xhdpi:96" "xxhdpi:144" "xxxhdpi:192"; do
+            dir="${entry%%:*}"
+            px="${entry##*:}"
+            mkdir -p "$ICON_SRC/mipmap-$dir"
+            convert "public/img/icon_launcher.jpg" -resize "${px}x${px}" \
+              "$ICON_SRC/mipmap-$dir/ic_launcher.png"
+            cp "$ICON_SRC/mipmap-$dir/ic_launcher.png" \
+               "$ICON_SRC/mipmap-$dir/ic_launcher_round.png"
+            echo "Done: $dir ${px}x${px}"
+          done
+
+          # Remove adaptive icon XMLs — these override PNGs on Android 8+ and must be deleted
+          rm -rf "$ICON_SRC/mipmap-anydpi-v26"
+          echo "Adaptive icon XMLs removed"
+
+      - name: Write android/local.properties
+        run: echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+
+      - name: Make gradlew executable
+        run: chmod +x android/gradlew
+
+      - name: Build debug APK
+        working-directory: android
+        run: |
+          ./gradlew assembleDebug \
+            --no-daemon \
+            --warning-mode all \
+            --stacktrace \
+            -Dorg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=512m"
+
+      - name: Rename APK
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk \
+             android/app/build/outputs/apk/debug/kcdl-inspector.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: kcdl-inspector
+          path: android/app/build/outputs/apk/debug/kcdl-inspector.apk
+          retention-days: 30
+          if-no-files-found: error
