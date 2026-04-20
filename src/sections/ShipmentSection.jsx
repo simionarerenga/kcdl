@@ -243,7 +243,8 @@ function ReadyToShipTab({ stock, user }) {
   }
 
   async function handleShip() {
-    if (!vessel.trim())    { flash('⚠️ Enter vessel name.'); return; }\n    if (!selected.size)    { flash('⚠️ Select at least one bag.'); return; }
+    if (!vessel.trim())    { flash('⚠️ Enter vessel name.'); return; }
+    if (!selected.size)    { flash('⚠️ Select at least one bag.'); return; }
 
     const shipBags  = bags.filter(b => selected.has(b.id));
     const totalKg   = shipBags.reduce((s, b) => s + (b.preShipWeight || b.stationWeight || 0), 0);
