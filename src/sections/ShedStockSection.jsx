@@ -9,7 +9,11 @@ import { newDocId, queueWrite } from '../utils/syncManager';
 // All writes are queued locally and synced automatically — no manual forage needed.
 
 // ── Serial input with fixed prefix ────────────────────────────────────────
-function SerialInput({ suffix, onChange, isStation, prefix, disabled }) {
+function SerialInput({ suffix, onChange, isStation, prefix, disabled, onFieldClick }) {
+  // Trigger the picker when the KI- field is clicked while suffix is empty
+  const handleClick = (!isStation && !disabled && onFieldClick && !suffix.trim())
+    ? onFieldClick
+    : undefined;
   return (
     <div style={{
       display: 'flex', alignItems: 'center',
@@ -27,18 +31,28 @@ function SerialInput({ suffix, onChange, isStation, prefix, disabled }) {
         {prefix}
       </div>
       <input type="text" value={suffix} onChange={e => onChange(e.target.value)}
-        placeholder="00042" autoCapitalize="characters" disabled={disabled}
+        placeholder={!isStation && onFieldClick && !suffix.trim() ? 'Tap to pick issued bag…' : '00042'}
+        autoCapitalize="characters" disabled={disabled}
+        onClick={handleClick}
         style={{ flex: 1, border: 'none', padding: '0 10px', height: 44,
-          fontSize: '0.97rem', outline: 'none', background: 'transparent' }} />
+          fontSize: '0.97rem', outline: 'none', background: 'transparent',
+          cursor: handleClick ? 'pointer' : 'text' }} />
     </div>
   );
 }
 
 export default function ShedStockSection({ user, userProfile }) {
-  const [farmers,      setFarmers]      = useState([]);
-  const [issuances,    setIssuances]    = useState([]); // bags issued to selected farmer
-  const [showBagPicker,setShowBagPicker]= useState(false);
-  const [msg,          setMsg]          = useState('');
+  const [farmers,       setFarmers]       = useState([]);
+  const [issuances,     setIssuances]     = useState([]); // remaining issued bags (not yet added this session)
+  const [allIssuances,  setAllIssuances]  = useState([]); // full original list — never trimmed
+  const [showBagPicker, setShowBagPicker] = useState(false);
+  const [pickerBags,    setPickerBags]    = useState([]);  // what the picker actually shows
+  const [pickerOpenCount, setPickerOpenCount] = useState(0); // resets each time bag modal opens fresh
+  const [msg,           setMsg]           = useState('');
+
+  // Farmer search
+  const [farmerSearch,       setFarmerSearch]       = useState('');
+  const [farmerDropdownOpen, setFarmerDropdownOpen] = useState(false);
 
   // Session
   const [sessionFarmerId,   setSessionFarmerId]   = useState('');
@@ -123,19 +137,47 @@ export default function ShedStockSection({ user, userProfile }) {
     }));
   }, [stationId, sessionLoaded, sessionFarmerId, sessionFarmerName, sessionFarmerCard, sessionBags, sessionBatches]);
 
+  // Filtered farmer list for the search dropdown
+  const filteredFarmers = farmerSearch.trim()
+    ? farmers.filter(f =>
+        f.name.toLowerCase().includes(farmerSearch.toLowerCase()) ||
+        (f.farmerId || '').toLowerCase().includes(farmerSearch.toLowerCase()) ||
+        (f.idCard   || '').toLowerCase().includes(farmerSearch.toLowerCase())
+      )
+    : farmers;
+
   function pickFarmer(fId) {
     const f = farmers.find(x => x.id === fId);
     if (f) { setSessionFarmerId(f.id); setSessionFarmerName(f.name); setSessionFarmerCard(f.idCard || ''); }
     else   { setSessionFarmerId(''); setSessionFarmerName(''); setSessionFarmerCard(''); }
     setSessionBags([]); setSessionBatches([]);
-    setIssuances([]);
+    setIssuances([]); setAllIssuances([]);
+    setFarmerSearch(''); setFarmerDropdownOpen(false);
     if (!fId) return;
     // Load bags currently issued to this farmer
     import('firebase/firestore').then(({ getDocs, query: q, collection: col, where: w }) => {
       getDocs(q(col(db, 'bagIssuances'), w('farmerId', '==', fId), w('status', '==', 'issued')))
-        .then(snap => setIssuances(snap.docs.map(d => ({ id: d.id, ...d.data() }))))
+        .then(snap => {
+          const bags = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          setIssuances(bags);
+          setAllIssuances(bags); // preserve full list for first-open picker
+        })
         .catch(() => {});
     });
+  }
+
+  // Opens the bag picker.
+  // First open (pickerOpenCount === 0): shows ALL bags issued to this farmer.
+  // Subsequent opens: shows only bags not yet added to this weighing session.
+  function openBagPicker() {
+    const isFirstOpen = pickerOpenCount === 0;
+    const list = isFirstOpen
+      ? allIssuances
+      : allIssuances.filter(bag => !sessionBags.some(b => b.bagSerial === bag.bagSerial));
+    setPickerBags(list);
+    setPickerOpenCount(c => c + 1);
+    setShowBagModal(false);
+    setShowBagPicker(true);
   }
 
   // Called when inspector picks a bag from the picker modal
@@ -248,10 +290,76 @@ export default function ShedStockSection({ user, userProfile }) {
 
         <div className="ws-field">
           <div className="ws-label">Farmer</div>
-          <select className="ws-select" value={sessionFarmerId} onChange={e => pickFarmer(e.target.value)}>
-            <option value="">— Select Farmer —</option>
-            {farmers.map(f => <option key={f.id} value={f.id}>{f.name} ({f.farmerId})</option>)}
-          </select>
+          {sessionFarmerId ? (
+            /* ── Selected state: show name with a clear button ── */
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              background: '#e8f4f7', borderRadius: 8, padding: '10px 12px',
+              border: '1.5px solid #b2dfdb',
+            }}>
+              <span style={{ flex: 1, fontWeight: 700, color: '#007c91', fontSize: '0.95rem' }}>
+                {sessionFarmerName}
+                {sessionFarmerCard && (
+                  <span style={{ fontWeight: 400, color: '#888', fontSize: '0.79rem', marginLeft: 8 }}>
+                    🪪 {sessionFarmerCard}
+                  </span>
+                )}
+              </span>
+              <button type="button" onClick={() => pickFarmer('')}
+                style={{ background: 'none', border: 'none', cursor: 'pointer',
+                  color: '#888', fontSize: '1.15rem', lineHeight: 1, padding: 0, flexShrink: 0 }}>
+                ✕
+              </button>
+            </div>
+          ) : (
+            /* ── Search state: text input + live dropdown ── */
+            <div style={{ position: 'relative' }}>
+              <style>{`.ws-farmer-search::placeholder{color:#bbb;font-style:italic}`}</style>
+              <input
+                className="ws-farmer-search"
+                type="text"
+                value={farmerSearch}
+                onChange={e => { setFarmerSearch(e.target.value); setFarmerDropdownOpen(true); }}
+                onFocus={() => setFarmerDropdownOpen(true)}
+                onBlur={() => setTimeout(() => setFarmerDropdownOpen(false), 180)}
+                placeholder="Search registered farmers"
+                style={{
+                  width: '100%', padding: '10px 12px', border: '1.5px solid #ccc',
+                  borderRadius: 8, fontSize: '0.95rem', boxSizing: 'border-box',
+                  outline: 'none', background: '#fff',
+                }}
+              />
+              {farmerDropdownOpen && (filteredFarmers.length > 0 || farmerSearch.trim()) && (
+                <div style={{
+                  position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, zIndex: 300,
+                  background: '#fff', border: '1.5px solid #e0eef2', borderRadius: 10,
+                  boxShadow: '0 6px 20px rgba(0,0,0,0.14)', maxHeight: 220, overflowY: 'auto',
+                }}>
+                  {filteredFarmers.length === 0 ? (
+                    <div style={{ padding: '14px', fontSize: '0.84rem', color: '#888', textAlign: 'center' }}>
+                      No farmers found for "{farmerSearch}"
+                    </div>
+                  ) : filteredFarmers.map(f => (
+                    <button key={f.id} type="button"
+                      onMouseDown={() => pickFarmer(f.id)}
+                      style={{
+                        width: '100%', textAlign: 'left', padding: '11px 14px',
+                        border: 'none', borderBottom: '1px solid #f0f0f0',
+                        background: 'none', cursor: 'pointer', display: 'block',
+                      }}>
+                      <div style={{ fontWeight: 700, fontSize: '0.93rem', color: '#1a1a1a' }}>
+                        {f.name}
+                      </div>
+                      <div style={{ fontSize: '0.75rem', color: '#888', marginTop: 1 }}>
+                        {f.farmerId}{f.idCard ? ` · 🪪 ${f.idCard}` : ''}
+                        {f.village ? ` · 📍 ${f.village}` : ''}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="ws-field">
@@ -288,7 +396,7 @@ export default function ShedStockSection({ user, userProfile }) {
             </div>
             <button className="ws-weigh-btn ws-btn-bag" type="button"
               disabled={!sessionFarmerId}
-              onClick={() => { setBagSuffix(''); setBagWeight(''); setBagIsStation(false); setShowBagModal(true); }}>
+              onClick={() => { setBagSuffix(''); setBagWeight(''); setBagIsStation(false); setPickerOpenCount(0); setShowBagModal(true); }}>
               ⚖️ Weigh Quality Bag
             </button>
           </div>
@@ -367,24 +475,12 @@ export default function ShedStockSection({ user, userProfile }) {
             <div style={{ position: 'relative' }}>
               <SerialInput suffix={bagSuffix} onChange={setBagSuffix}
                 isStation={bagIsStation}
-                prefix={bagIsStation ? `${stationPrefix}-` : 'KI-'} />
-              {issuances.length > 0 && !bagSuffix && (
-                <button type="button"
-                  onClick={() => { setShowBagModal(false); setShowBagPicker(true); }}
-                  style={{
-                    position: 'absolute', right: 8, top: '50%',
-                    transform: 'translateY(-50%)',
-                    background: '#007c91', color: '#fff', border: 'none',
-                    borderRadius: 6, padding: '4px 10px',
-                    fontSize: '0.75rem', fontWeight: 700, cursor: 'pointer',
-                  }}>
-                  Pick
-                </button>
-              )}
+                prefix={bagIsStation ? `${stationPrefix}-` : 'KI-'}
+                onFieldClick={!bagIsStation && allIssuances.length > 0 ? openBagPicker : undefined} />
             </div>
-            {issuances.length > 0 && !bagSuffix && (
+            {!bagIsStation && allIssuances.length > 0 && !bagSuffix && (
               <div style={{ fontSize: '0.74rem', color: '#007c91', marginTop: 4 }}>
-                Tap <strong>Pick</strong> to select from {issuances.length} issued bag{issuances.length !== 1 ? 's' : ''}.
+                👆 Tap the field to pick from issued bags.
               </div>
             )}
             {bagIsStation && (
@@ -417,44 +513,41 @@ export default function ShedStockSection({ user, userProfile }) {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
               <div>
                 <div style={{ fontWeight: 800, fontSize: '1rem', color: 'var(--text-primary)' }}>
-                  Select Issued Bag
+                  {pickerOpenCount <= 1 ? 'Select Issued Bag' : 'Select Remaining Bag'}
                 </div>
                 <div style={{ fontSize: '0.77rem', color: '#888', marginTop: 2 }}>
-                  Bags issued to {sessionFarmerName}
+                  {pickerOpenCount <= 1
+                    ? `All bags issued to ${sessionFarmerName}`
+                    : `Bags not yet added · ${sessionFarmerName}`}
                 </div>
               </div>
               <button className="bag-detail-close" type="button"
                 onClick={() => { setShowBagPicker(false); setShowBagModal(true); }}>✕</button>
             </div>
-            {issuances.length === 0 ? (
+            {pickerBags.length === 0 ? (
               <div style={{ textAlign: 'center', color: '#888', padding: '20px 0', fontSize: '0.88rem' }}>
-                No issued bags found for this farmer.
+                {pickerOpenCount <= 1
+                  ? 'No issued bags found for this farmer.'
+                  : 'All issued bags have already been added.'}
               </div>
             ) : (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
-                {issuances.map(bag => {
-                  const alreadyAdded = sessionBags.some(b => b.bagSerial === bag.bagSerial);
-                  return (
-                    <button key={bag.id} type="button"
-                      onClick={() => !alreadyAdded && selectBagFromPicker(bag)}
-                      disabled={alreadyAdded}
-                      style={{
-                        background: alreadyAdded ? '#f0f0f0' : '#fff',
-                        border: `1.5px solid ${alreadyAdded ? '#ccc' : '#e0eef2'}`,
-                        borderRadius: 10, padding: '10px 6px',
-                        cursor: alreadyAdded ? 'default' : 'pointer',
-                        fontWeight: 700, fontSize: '0.78rem',
-                        color: alreadyAdded ? '#aaa' : '#007c91',
-                        textAlign: 'center', wordBreak: 'break-all',
-                        boxShadow: alreadyAdded ? 'none' : '0 1px 4px rgba(0,0,0,0.07)',
-                      }}>
-                      {bag.bagSerial}
-                      {alreadyAdded && (
-                        <div style={{ fontSize: '0.62rem', color: '#aaa', marginTop: 2 }}>added</div>
-                      )}
-                    </button>
-                  );
-                })}
+                {pickerBags.map(bag => (
+                  <button key={bag.id} type="button"
+                    onClick={() => selectBagFromPicker(bag)}
+                    style={{
+                      background: '#fff',
+                      border: '1.5px solid #e0eef2',
+                      borderRadius: 10, padding: '10px 6px',
+                      cursor: 'pointer',
+                      fontWeight: 700, fontSize: '0.78rem',
+                      color: '#007c91',
+                      textAlign: 'center', wordBreak: 'break-all',
+                      boxShadow: '0 1px 4px rgba(0,0,0,0.07)',
+                    }}>
+                    {bag.bagSerial}
+                  </button>
+                ))}
               </div>
             )}
             <button className="btn-secondary" style={{ marginTop: 14 }} type="button"
