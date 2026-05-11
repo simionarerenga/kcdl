@@ -2,15 +2,17 @@
 import { useEffect, useRef, useState } from 'react';
 
 const NAV_ITEMS = [
-  { id: 'home',      label: '🏠 Home' },
-  { id: 'shed',      label: '⚖️ Weigh Copra' },
-  { id: 'warehouse', label: '🏚️ Warehouse' },
-  { id: 'bags_hub',  label: '📦 Bags & Stock' },
-  { id: 'farmers',   label: '👩‍🌾 Farmers Registry' },
-  { id: 'summary',   label: '📊 Daily Summary' },
-  { id: 'shipment',  label: '🚢 Shipments' },
-  { id: 'help',      label: '❓ Help' },
-  { id: 'settings',  label: '⚙️ Settings' },
+  { id: 'home',       label: '🏠 Home' },
+  { id: 'shed',       label: '⚖️ Weigh Copra' },
+  { id: 'warehouse',  label: '🏚️ Warehouse' },
+  { id: 'bags_hub',   label: '📦 Bags & Stock' },
+  { id: 'farmers',    label: '👩‍🌾 Farmers Registry' },
+  { id: 'summary',    label: '📊 Daily Summary' },
+  { id: 'shipment',   label: '🚢 Shipments' },
+  { id: 'bag_search', label: '🔍 Bag Search' },
+  { id: 'tools',      label: '🔧 Tools' },
+  { id: 'help',       label: '❓ Help' },
+  { id: 'settings',   label: '⚙️ Settings' },
 ];
 
 export default function TopBar({ menuOpen, onToggleMenu, onNavigate, onClose, onSignOut, userEmail, stationName }) {
