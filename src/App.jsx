@@ -20,19 +20,23 @@ import ShipmentSection from './sections/ShipmentSection';
 import DailySummarySection from './sections/DailySummarySection';
 import SettingsSection from './sections/SettingsSection';
 import HelpSection from './sections/HelpSection';
+import BagSearchSection from './sections/BagSearchSection';
+import ToolsSection from './sections/ToolsSection';
 
 const SECTIONS = {
-  home:      HomeScreen,
-  cpr:       CPRSection,
-  twc:       TWCSection,
-  farmers:   FarmersSection,
-  bags_hub:  BagsHubSection,
-  shed:      ShedStockSection,
-  warehouse: WarehouseSection,
-  shipment:  ShipmentSection,
-  summary:   DailySummarySection,
-  settings:  SettingsSection,
-  help:      HelpSection,
+  home:       HomeScreen,
+  cpr:        CPRSection,
+  twc:        TWCSection,
+  farmers:    FarmersSection,
+  bags_hub:   BagsHubSection,
+  shed:       ShedStockSection,
+  warehouse:  WarehouseSection,
+  shipment:   ShipmentSection,
+  summary:    DailySummarySection,
+  bag_search: BagSearchSection,
+  tools:      ToolsSection,
+  settings:   SettingsSection,
+  help:       HelpSection,
 };
 
 function loadSettings() {
