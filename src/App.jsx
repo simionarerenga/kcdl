@@ -1,160 +1,81 @@
 // src/App.jsx
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import { auth, db } from './firebase';
-import { AppDataProvider } from './context/AppDataContext';
+import { collection, query, where, onSnapshot, orderBy } from 'firebase/firestore';
+import { requestNotificationPermission, scheduleWarehouseReminders, notifyBagDelivery } from './utils/notifications';
+import { storageGet, storageSet } from './utils/storage';
+import { startSyncManager } from './utils/syncManager';
+import TopBar from './components/TopBar';
+import LoginScreen from './sections/LoginScreen';
+import HomeScreen from './sections/HomeScreen';
+import CPRSection from './sections/CPRSection';
+import TWCSection from './sections/TWCSection';
+import FarmersSection from './sections/FarmersSection';
+import BagsHubSection from './sections/BagsHubSection';
+import ShedStockSection from './sections/ShedStockSection';
+import WarehouseSection from './sections/WarehouseSection';
+import ShipmentSection from './sections/ShipmentSection';
+import DailySummarySection from './sections/DailySummarySection';
+import SettingsSection from './sections/SettingsSection';
+import HelpSection from './sections/HelpSection';
 
-import TopBar               from './components/TopBar';
-import LoginScreen          from './sections/LoginScreen';
-import Dashboard            from './sections/Dashboard';
-import LiveActivity         from './sections/LiveActivity';
-import CPRMonitor           from './sections/CPRMonitor';
-import TWCMonitor           from './sections/TWCMonitor';
-import ShedWarehouseMonitor from './sections/ShedWarehouseMonitor';
-import ShipmentsMonitor     from './sections/ShipmentsMonitor';
-import FarmersMonitor       from './sections/FarmersMonitor';
-import ReportsCentre        from './sections/ReportsCentre';
-import Analytics            from './sections/Analytics';
-import IslandsManager       from './sections/IslandsManager';
-import VillagesManager      from './sections/VillagesManager';
-import CooperativesManager  from './sections/CooperativesManager';
-import UserManagement       from './sections/UserManagement';
-import AuditLog             from './sections/AuditLog';
-import SettingsSection      from './sections/SettingsSection';
-
-export const SECTIONS = [
-  {
-    group: 'Overview',
-    items: [
-      { id: 'dashboard', icon: '📊', label: 'Dashboard',     desc: 'Live KPIs, island weights & recent activity' },
-      { id: 'activity',  icon: '⚡', label: 'Live Activity', desc: 'Real-time feed of all operations' },
-    ],
-  },
-  {
-    group: 'Field Data',
-    items: [
-      { id: 'cpr',       icon: '📋', label: 'CPR Records',       desc: 'Copra Purchase Records — search & export' },
-      { id: 'twc',       icon: '🚢', label: 'TWC Records',       desc: 'Transport Weighing Certificates' },
-      { id: 'shedstock', icon: '🛍️', label: 'Shed & Warehouse',  desc: 'Bag inventory by stage and station' },
-      { id: 'shipments', icon: '🛳️', label: 'Shipments',         desc: 'Ready-to-ship & shipped bag manifests' },
-      { id: 'farmers',   icon: '👩‍🌾', label: 'Farmers Registry', desc: 'Registered farmer profiles & search' },
-    ],
-  },
-  {
-    group: 'Reports',
-    items: [
-      { id: 'reports',   icon: '📑', label: 'Reports Centre', desc: 'Generate, preview & print all reports' },
-      { id: 'analytics', icon: '📈', label: 'Analytics',      desc: 'Charts & production trend breakdowns' },
-    ],
-  },
-  {
-    group: 'Admin',
-    items: [
-      { id: 'islands',       icon: '🏝️', label: 'Islands',        desc: 'Outer island registry & details' },
-      { id: 'villages',      icon: '🏭', label: 'Warehouses',     desc: 'Warehouse registry per island' },
-      { id: 'cooperatives',  icon: '🤝', label: 'Cooperatives',   desc: 'Cooperative registry per island' },
-      { id: 'users',       icon: '👤', label: 'User Management', desc: 'Inspector accounts & access roles' },
-      { id: 'audit_log',   icon: '📋', label: 'Audit Log',        desc: 'History of all admin actions' },
-      { id: 'settings',    icon: '⚙️', label: 'Settings',         desc: 'System info, pricing & account details' },
-    ],
-  },
-];
-
-const SECTION_MAP = {
-  dashboard: Dashboard,
-  activity:  LiveActivity,
-  cpr:       CPRMonitor,
-  twc:       TWCMonitor,
-  shedstock: ShedWarehouseMonitor,
-  shipments: ShipmentsMonitor,
-  farmers:   FarmersMonitor,
-  reports:   ReportsCentre,
-  analytics: Analytics,
-  islands:       IslandsManager,
-  villages:      VillagesManager,
-  cooperatives:  CooperativesManager,
-  users:         UserManagement,
-  audit_log:     AuditLog,
-  settings:      SettingsSection,
+const SECTIONS = {
+  home:      HomeScreen,
+  cpr:       CPRSection,
+  twc:       TWCSection,
+  farmers:   FarmersSection,
+  bags_hub:  BagsHubSection,
+  shed:      ShedStockSection,
+  warehouse: WarehouseSection,
+  shipment:  ShipmentSection,
+  summary:   DailySummarySection,
+  settings:  SettingsSection,
+  help:      HelpSection,
 };
 
-export const SECTION_LABEL = {};
-SECTIONS.forEach(g => g.items.forEach(i => {
-  SECTION_LABEL[i.id] = { label: i.label, icon: i.icon };
-}));
-
-/* ── Exit Confirm Modal ── */
-function ExitModal({ onStay, onExit }) {
-  return (
-    <div className="modal-overlay" style={{ zIndex: 999 }}>
-      <div className="modal-box" style={{ maxWidth: 320, textAlign: 'center' }}>
-        <div className="modal-body" style={{ padding: '32px 24px 24px' }}>
-          <div style={{ fontSize: '2.5rem', marginBottom: 12 }}>👋</div>
-          <div className="modal-title" style={{ marginBottom: 10, fontSize: '1.1rem' }}>
-            Exit KCDL Admin?
-          </div>
-          <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: 1.6, marginBottom: 24 }}>
-            Are you sure you want to close the app?
-          </p>
-          <div style={{ display: 'flex', gap: 10 }}>
-            <button type="button" className="btn btn-secondary"
-              style={{ flex: 1, justifyContent: 'center' }} onClick={onStay}>
-              Stay
-            </button>
-            <button type="button" className="btn btn-danger"
-              style={{ flex: 1, justifyContent: 'center' }} onClick={onExit}>
-              Exit App
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+function loadSettings() {
+  try { return JSON.parse(localStorage.getItem('appSettings')) || {}; }
+  catch { return {}; }
 }
 
-/* ── Sign Out Confirm Modal ── */
-function SignOutModal({ onCancel, onConfirm }) {
+/* ── Not-provisioned screen ─────────────────────────────────────────────── */
+function NotProvisionedScreen({ email, onSignOut }) {
   return (
-    <div className="modal-overlay" style={{ zIndex: 999 }}>
-      <div className="modal-box" style={{ maxWidth: 320, textAlign: 'center' }}>
-        <div className="modal-body" style={{ padding: '32px 24px 24px' }}>
-          <div style={{ fontSize: '2.5rem', marginBottom: 12 }}>🔐</div>
-          <div className="modal-title" style={{ marginBottom: 10, fontSize: '1.1rem' }}>
-            Sign Out?
-          </div>
-          <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: 1.6, marginBottom: 24 }}>
-            Are you sure you want to sign out of KCDL Admin?
-          </p>
-          <div style={{ display: 'flex', gap: 10 }}>
-            <button type="button" className="btn btn-secondary"
-              style={{ flex: 1, justifyContent: 'center' }} onClick={onCancel}>
-              Cancel
-            </button>
-            <button type="button" className="btn btn-danger"
-              style={{ flex: 1, justifyContent: 'center' }} onClick={onConfirm}>
-              Sign Out
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ── Access Denied ── */
-function AccessDenied({ email, onSignOut }) {
-  return (
-    <div className="login-page">
-      <div className="login-bg-circle login-bg-circle-1" />
+    <div className="login-screen">
       <div className="login-card" style={{ textAlign: 'center' }}>
-        <div style={{ fontSize: '3rem', marginBottom: 16 }}>🔒</div>
-        <div className="login-title" style={{ fontSize: '1.3rem' }}>Access Denied</div>
-        <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: 1.7, margin: '12px 0 24px' }}>
-          <strong style={{ color: 'var(--text-primary)' }}>{email}</strong> does not have admin access.
-          Contact your HQ administrator.
+        <img src="./img/icon_bg.png" alt="KCDL" className="login-logo" />
+
+        <div style={{ fontSize: '2.5rem', margin: '8px 0' }}>🔒</div>
+
+        <h2 style={{ margin: '0 0 8px', fontSize: '1.2rem', color: '#1a1a1a' }}>
+          Account Not Provisioned
+        </h2>
+
+        <p style={{ fontSize: '0.88rem', color: '#555', lineHeight: 1.6, margin: '0 0 20px' }}>
+          Your account (<strong>{email}</strong>) has not been set up yet.
+          Station profiles, islands, cooperatives and villages are managed
+          exclusively by <strong>HQ Tarawa</strong>.
         </p>
-        <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
+
+        <div style={{
+          background: '#f0f8fa', borderRadius: 10, padding: '14px 16px',
+          borderLeft: '3px solid #007c91', textAlign: 'left', marginBottom: 24
+        }}>
+          <div style={{ fontWeight: 700, fontSize: '0.82rem', color: '#007c91', marginBottom: 6 }}>
+            What to do
+          </div>
+          <ol style={{ margin: 0, paddingLeft: 18, fontSize: '0.83rem',
+            color: '#444', lineHeight: 1.8 }}>
+            <li>Contact HQ Tarawa Admin</li>
+            <li>Provide your registered email address</li>
+            <li>HQ will provision your station account</li>
+            <li>Sign out and sign back in once notified</li>
+          </ol>
+        </div>
+
+        <button className="btn-primary" style={{ width: '100%' }}
           onClick={onSignOut} type="button">
           Sign Out
         </button>
@@ -163,218 +84,243 @@ function AccessDenied({ email, onSignOut }) {
   );
 }
 
-/* ═══════════════════════════════════════
-   Main App
-═══════════════════════════════════════ */
+/* ── Main App ───────────────────────────────────────────────────────────── */
 export default function App() {
-  const [user,         setUser]         = useState(undefined);
-  const [profile,      setProfile]      = useState(null);
-  const [accessDenied, setAccessDenied] = useState(false);
-  const [section,      setSection]      = useState('dashboard'); // always starts at dashboard
-  const [authError,    setAuthError]    = useState('');
-  const [showExit,     setShowExit]     = useState(false);
-  const [showSignOut,  setShowSignOut]  = useState(false);
-  const [reportInit,   setReportInit]   = useState(null);
+  const [user, setUser]               = useState(undefined);
+  const [userProfile, setUserProfile] = useState(null);
+  const [authError, setAuthError]     = useState('');
+  const [notProvisioned, setNotProvisioned] = useState(false);
+  const [currentSection, setCurrentSection] = useState('home');
+  const [menuOpen, setMenuOpen]       = useState(false);
+  const [settings, setSettings]       = useState(loadSettings);
 
-  // Ref so back-button handler always sees latest section
-  const sectionRef = useRef(section);
-  useEffect(() => { sectionRef.current = section; }, [section]);
-
-  // Dashboard registers a "close detail" callback here
-  const dashBackRef = useRef(null);
-
-  // Reports Centre registers a "go back to list" callback here
-  const reportsBackRef   = useRef(null);
-  // Analytics registers a "go back to list" callback here
-  const analyticsBackRef = useRef(null);
-
-  /* ── Auth listener ── */
+  // On native Android, also hydrate from Capacitor Preferences (storageGet is async)
   useEffect(() => {
-    return onAuthStateChanged(auth, async firebaseUser => {
+    storageGet('appSettings').then(v => {
+      if (v) try { setSettings(JSON.parse(v)); } catch {}
+    });
+  }, []);
+
+  // Start offline write queue — flushes queued Firebase writes whenever online
+  useEffect(() => startSyncManager(db), []);
+  const [showExitModal, setShowExitModal] = useState(false);
+
+  const navHistoryRef    = useRef([]);
+  const showExitModalRef = useRef(false);
+
+  useEffect(() => { showExitModalRef.current = showExitModal; }, [showExitModal]);
+
+  useEffect(() => {
+    return onAuthStateChanged(auth, async (firebaseUser) => {
       setAuthError('');
-      setAccessDenied(false);
+      setNotProvisioned(false);
       if (firebaseUser) {
         try {
           const snap = await getDoc(doc(db, 'users', firebaseUser.uid));
           if (snap.exists()) {
-            const p = snap.data();
-            if (p.role === 'admin' || p.role === 'hq' || !p.role) {
-              setProfile(p); setUser(firebaseUser);
-              setSection('dashboard');
-            } else {
-              setUser(firebaseUser); setAccessDenied(true);
-            }
+            const profile = snap.data();
+            setUserProfile(profile);
+            setUser({ ...firebaseUser, stationId: profile.stationId });
+            // Request notification permission on login
+            requestNotificationPermission().catch(() => {});
           } else {
-            setProfile(null); setUser(firebaseUser);
-            setSection('dashboard');
+            // Account exists in Firebase Auth but has no profile in Firestore —
+            // it has not been provisioned by HQ Admin yet.
+            setUser(firebaseUser);
+            setNotProvisioned(true);
           }
         } catch (e) {
-          setAuthError(e.message); setUser(firebaseUser);
+          console.error('[App] Firestore getDoc failed after auth:', e.code, e.message);
+          setAuthError(`Signed in but could not load your profile (${e.code || e.message}).`);
+          setUser(firebaseUser);
         }
       } else {
-        setUser(null); setProfile(null); setAccessDenied(false);
+        setUser(null);
+        setUserProfile(null);
+        setNotProvisioned(false);
       }
     });
   }, []);
 
-  /* ── Back button handler ── */
   useEffect(() => {
-    let removeListener = null;
+    document.body.classList.toggle('dark-mode', !!settings.darkMode);
+    document.documentElement.style.setProperty('--font-size', `${settings.fontSize || 16}px`);
+  }, [settings]);
 
-    async function setupBackButton() {
-      function handleBack() {
-        const cur = sectionRef.current;
-
-        if (cur === 'analytics') {
-          if (analyticsBackRef.current) {
-            analyticsBackRef.current();
-            analyticsBackRef.current = null;
-          } else {
-            setSection('dashboard');
-          }
-          return;
-        }
-
-        if (cur === 'reports') {
-          // If detail view is open inside Reports Centre, close it first
-          if (reportsBackRef.current) {
-            reportsBackRef.current();
-            reportsBackRef.current = null;
-          } else {
-            // Reports Centre list → go to Dashboard
-            setSection('dashboard');
-          }
-          return;
-        }
-
-        if (cur === 'dashboard') {
-          // If a Dashboard detail card is open, close it first
-          if (dashBackRef.current) {
-            dashBackRef.current();
-            dashBackRef.current = null;
-          } else {
-            // Dashboard main view → show exit confirm
-            setShowExit(true);
-          }
-          return;
-        }
-
-        // Any other section → back to Dashboard
-        setSection('dashboard');
+  // Android hardware back button
+  useEffect(() => {
+    window.history.pushState({ kcdl: true }, '');
+    const handlePop = () => {
+      window.history.pushState({ kcdl: true }, '');
+      if (showExitModalRef.current) { setShowExitModal(false); return; }
+      const history = navHistoryRef.current;
+      if (history.length > 0) {
+        const prev = history[history.length - 1];
+        navHistoryRef.current = history.slice(0, -1);
+        setCurrentSection(prev);
+      } else {
+        setShowExitModal(true);
       }
-
-      try {
-        const { App: CapApp } = await import('@capacitor/app');
-        const handle = await CapApp.addListener('backButton', handleBack);
-        removeListener = () => handle.remove();
-      } catch {
-        // Web/dev fallback — popstate
-        const onPop = () => handleBack();
-        window.history.pushState(null, '', window.location.href);
-        window.addEventListener('popstate', onPop);
-        removeListener = () => window.removeEventListener('popstate', onPop);
-      }
-    }
-
-    setupBackButton();
-    return () => { if (removeListener) removeListener(); };
+    };
+    window.addEventListener('popstate', handlePop);
+    return () => window.removeEventListener('popstate', handlePop);
   }, []);
 
-  /* ── Push history entry on section change ── */
   useEffect(() => {
-    window.history.pushState(null, '', window.location.href);
-  }, [section]);
+    let cleanup = null;
+    import('@capacitor/app').then(({ App: CapApp }) => {
+      CapApp.addListener('backButton', () => {
+        if (showExitModalRef.current) { setShowExitModal(false); return; }
+        const history = navHistoryRef.current;
+        if (history.length > 0) {
+          const prev = history[history.length - 1];
+          navHistoryRef.current = history.slice(0, -1);
+          setCurrentSection(prev);
+        } else {
+          setShowExitModal(true);
+        }
+      }).then(handle => { cleanup = () => handle.remove(); });
+    }).catch(() => {});
+    return () => { if (cleanup) cleanup(); };
+  }, []);
 
-  async function handleSignOut() {
+  // ── Schedule warehouse reminder notifications ─────────────────────────────
+  useEffect(() => {
+    if (!userProfile) return;
+    const stId = userProfile.stationId;
+    if (!stId) return;
+
+    // Two separate top-level subscriptions — avoids nested onSnapshot leak
+    let _recentCount = 0;
+    let _unstakedKg  = 0;
+
+    const u1 = onSnapshot(
+      query(collection(db,'shedStock'), where('stationId','==',stId), where('status','==','recently_weighed')),
+      snap => {
+        _recentCount = snap.size;
+        scheduleWarehouseReminders({ recentlyWeighedCount: _recentCount, unstakedKg: _unstakedKg }).catch(()=>{});
+      }
+    );
+
+    const u3 = onSnapshot(
+      query(collection(db,'shedStock'), where('stationId','==',stId), where('status','==','in_shed')),
+      snap => {
+        _unstakedKg = snap.docs
+          .filter(d => d.data().type==='unstacked_batch' || d.data().notes==='Unstacked batch')
+          .reduce((s,d) => s + (d.data().stationWeight||0), 0);
+        scheduleWarehouseReminders({ recentlyWeighedCount: _recentCount, unstakedKg: _unstakedKg }).catch(()=>{});
+      }
+    );
+
+    // Listen for new bag deliveries from HQ and notify
+    const u2 = onSnapshot(
+      query(collection(db,'bagDeliveries'), where('stationId','==',stId), where('confirmed','==',false)),
+      snap => {
+        snap.docChanges().forEach(change => {
+          if (change.type === 'added') {
+            const d = change.doc.data();
+            notifyBagDelivery({ count:(d.bags||[]).length, stationName:userProfile.stationName }).catch(()=>{});
+          }
+        });
+      }
+    );
+
+    return () => { u1(); u2(); u3(); };
+  }, [userProfile]);
+
+  const navigate = useCallback((section) => {
+    setCurrentSection(prev => {
+      if (section === 'home') { navHistoryRef.current = []; }
+      else if (section !== prev) { navHistoryRef.current = [...navHistoryRef.current, prev]; }
+      return section;
+    });
+    setMenuOpen(false);
+  }, []);
+
+  const updateSettings = useCallback((newSettings) => {
+    setSettings(prev => {
+      const merged = { ...prev, ...newSettings };
+      localStorage.setItem('appSettings', JSON.stringify(merged)); // web/Electron
+      storageSet('appSettings', JSON.stringify(merged));            // native (Capacitor Preferences)
+      return merged;
+    });
+  }, []);
+
+  const handleSignOut = useCallback(async () => {
     await signOut(auth);
-    setSection('dashboard');
-    setProfile(null);
-    setAccessDenied(false);
-    setShowSignOut(false);
-  }
-
-  function navigate(id, reportId) {
-    if (id === 'dashboard' && dashBackRef.current) {
-      dashBackRef.current();
-      dashBackRef.current = null;
-    }
-    if (id === 'reports' && reportId) {
-      setReportInit(reportId);
-    } else if (id !== 'reports') {
-      setReportInit(null);
-    }
-    setSection(id || 'dashboard');
-  }
-
-  function handleExitApp() {
-    try {
-      import('@capacitor/app').then(({ App: CapApp }) => CapApp.exitApp());
-    } catch {
-      window.close();
-    }
-  }
+    setCurrentSection('home');
+    navHistoryRef.current = [];
+    setMenuOpen(false);
+    setUserProfile(null);
+    setAuthError('');
+    setNotProvisioned(false);
+  }, []);
 
   /* ── Render gates ── */
   if (user === undefined) {
     return (
       <div className="splash-screen">
-        <img src="./icon_bg.png" alt="KCDL" className="splash-logo"
-          onError={e => { e.target.style.display = 'none'; }} />
-        <p className="splash-text">KCDL Admin · Loading…</p>
+        <img src="./img/icon_bg.png" alt="KCDL" className="splash-logo" />
+        <p className="splash-text">Loading…</p>
       </div>
     );
   }
 
-  if (!user)        return <LoginScreen />;
-  if (accessDenied) return <AccessDenied email={user.email} onSignOut={handleSignOut} />;
+  if (!user) return <LoginScreen />;
 
-  const SectionComp = SECTION_MAP[section] || Dashboard;
-  const sectionMeta = SECTION_LABEL[section] || null;
+  if (notProvisioned) {
+    return <NotProvisionedScreen email={user.email} onSignOut={handleSignOut} />;
+  }
+
+  const SectionComponent = SECTIONS[currentSection] || HomeScreen;
 
   return (
-    <AppDataProvider>
-    <div className="app-shell">
-      {showExit && (
-        <ExitModal
-          onStay={() => setShowExit(false)}
-          onExit={handleExitApp}
-        />
-      )}
-
-      {showSignOut && (
-        <SignOutModal
-          onCancel={() => setShowSignOut(false)}
-          onConfirm={handleSignOut}
-        />
-      )}
-
-      <TopBar
-        sectionMeta={sectionMeta}
-        onGoHome={() => navigate('dashboard')}
-        onNavigate={navigate}
-        onSignOut={() => setShowSignOut(true)}
-        email={user.email}
-      />
-
+    <div>
       {authError && (
-        <div className="flash-bar flash-warn" style={{ margin: '0 5px', borderRadius: 6 }}>
-          ⚠️ Profile load error — some features may be limited: {authError}
+        <div className="auth-notice">
+          ⚠️ Profile could not be loaded — some features may be limited.
         </div>
       )}
-
-      <div className="page-body">
-        <SectionComp
+      <TopBar
+        menuOpen={menuOpen}
+        onToggleMenu={() => setMenuOpen(o => !o)}
+        onNavigate={navigate}
+        onClose={() => setMenuOpen(false)}
+        onSignOut={handleSignOut}
+        userEmail={user.email}
+        stationName={userProfile?.stationName}
+      />
+      <div className="container">
+        <SectionComponent
           onNavigate={navigate}
-          user={user}
-          currentUser={user}
-          profile={profile}
-          dashBackRef={section === 'dashboard' ? dashBackRef : undefined}
-          initialReport={section === 'reports' ? reportInit : undefined}
-          reportsBackRef={section === 'reports'   ? reportsBackRef   : undefined}
-          analyticsBackRef={section === 'analytics' ? analyticsBackRef : undefined}
+          settings={settings}
+          onUpdateSettings={updateSettings}
+          user={{ ...user, stationId: userProfile?.stationId || user.uid }}
+          userProfile={userProfile}
         />
       </div>
+
+      {showExitModal && (
+        <div className="overlay" onClick={() => setShowExitModal(false)}>
+          <div className="overlay-card exit-modal" onClick={e => e.stopPropagation()}>
+            <div className="exit-modal-icon">🚪</div>
+            <p className="exit-modal-text">
+              Do you want to exit <strong>KCDL Inspector</strong>?
+            </p>
+            <div className="overlay-actions" style={{ flexDirection: 'row', gap: 10 }}>
+              <button className="btn-secondary" style={{ flex: 1 }} type="button"
+                onClick={() => setShowExitModal(false)}>Cancel</button>
+              <button className="btn-primary" style={{ flex: 1 }} type="button"
+                onClick={() => {
+                  setShowExitModal(false);
+                  import('@capacitor/app')
+                    .then(({ App: CapApp }) => CapApp.exitApp())
+                    .catch(() => window.close());
+                }}>Exit</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
-    </AppDataProvider>
   );
 }
