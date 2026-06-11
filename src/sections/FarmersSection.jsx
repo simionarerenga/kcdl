@@ -206,7 +206,7 @@ function FarmerProfile({ farmer: init, onSaved, user }) {
 }
 
 /* ═══════════════ TRANSACTIONS SCREEN ═══════════════ */
-function FarmerTransactions({ farmer }) {
+function FarmerTransactions({ farmer, currentPrice }) {
   const [issuances, setIssuances] = useState([]);
   const [weighings, setWeighings] = useState([]);
   const [shipments, setShipments] = useState([]);
@@ -328,6 +328,11 @@ function FarmerTransactions({ farmer }) {
               )}
               <div style={{ fontSize:'0.74rem', color:'#888', marginTop:4, fontWeight:700 }}>
                 Total: {totalKg.toFixed(2)} kg
+                {currentPrice && (
+                  <span style={{ color:'#2e7d32', marginLeft:10 }}>
+                    ≈ {(totalKg * currentPrice.pricePerKg).toFixed(2)} {currentPrice.currency || 'AUD'}
+                  </span>
+                )}
               </div>
             </TxCard>
           );
@@ -357,7 +362,7 @@ const TABS = [
   { key: 'transactions', label: 'Transactions History' },
 ];
 
-function FarmerDetail({ farmer: init, onBack, onFarmerUpdated, user }) {
+function FarmerDetail({ farmer: init, onBack, onFarmerUpdated, user, currentPrice }) {
   const [tab, setTab]       = useState('profile');
   const [farmer, setFarmer] = useState(init);
 
@@ -383,13 +388,13 @@ function FarmerDetail({ farmer: init, onBack, onFarmerUpdated, user }) {
         ))}
       </div>
       {tab === 'profile' && <FarmerProfile farmer={farmer} onSaved={handleSaved} user={user} />}
-      {tab === 'transactions' && <FarmerTransactions farmer={farmer} />}
+      {tab === 'transactions' && <FarmerTransactions farmer={farmer} currentPrice={currentPrice} />}
     </div>
   );
 }
 
 /* ═══════════════ MAIN SECTION ═══════════════ */
-export default function FarmersSection({ user }) {
+export default function FarmersSection({ user, currentPrice }) {
   const [farmers, setFarmers]         = useState([]);
   const [search, setSearch]           = useState('');
   const [form, setForm]               = useState(EMPTY);
@@ -559,7 +564,7 @@ export default function FarmersSection({ user }) {
     return (
       <section>
         <h2 className="section-title">👩‍🌾 Farmers Registry</h2>
-        <FarmerDetail farmer={live} onBack={() => setSelected(null)} user={user} onFarmerUpdated={handleFarmerUpdated} />
+        <FarmerDetail farmer={live} onBack={() => setSelected(null)} user={user} onFarmerUpdated={handleFarmerUpdated} currentPrice={currentPrice} />
       </section>
     );
   }
