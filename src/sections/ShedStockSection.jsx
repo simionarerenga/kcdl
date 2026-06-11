@@ -34,7 +34,7 @@ function SerialInput({ suffix, onChange, isStation, prefix, disabled }) {
   );
 }
 
-export default function ShedStockSection({ user, userProfile }) {
+export default function ShedStockSection({ user, userProfile, currentPrice }) {
   const [farmers,      setFarmers]      = useState([]);
   const [issuances,    setIssuances]    = useState([]); // bags issued to selected farmer
   const [showBagPicker,setShowBagPicker]= useState(false);
@@ -219,7 +219,17 @@ export default function ShedStockSection({ user, userProfile }) {
       const parts = [];
       if (bc)  parts.push(`${bc} bag${bc !== 1 ? 's' : ''}`);
       if (btc) parts.push(`${btc} batch${btc !== 1 ? 'es' : ''}`);
-      flash(`✅ ${parts.join(' & ')} saved.`);
+
+      // Calculate total weight and estimated payment
+      const totalKg = [
+        ...sessionBags.map(b => b.stationWeight || 0),
+        ...sessionBatches.map(b => b.stationWeight || 0),
+      ].reduce((s, w) => s + w, 0);
+      const priceStr = currentPrice
+        ? ` · ~${(totalKg * currentPrice.pricePerKg).toFixed(2)} ${currentPrice.currency || 'AUD'}`
+        : '';
+
+      flash(`✅ ${parts.join(' & ')} saved — ${totalKg.toFixed(2)} kg${priceStr}`);
       setSessionBags([]); setSessionBatches([]);
       storageSet(`shedSession_${stationId}`, ''); // clear persisted session
     } catch (e) {
