@@ -97,6 +97,18 @@ export default function App() {
   const [currentSection, setCurrentSection] = useState('home');
   const [menuOpen, setMenuOpen]       = useState(false);
   const [settings, setSettings]       = useState(loadSettings);
+  const [currentPrice, setCurrentPrice] = useState(null); // { pricePerKg, currency }
+
+  // Load latest copra price from Firebase (set by HQ Admin)
+  useEffect(() => {
+    const unsub = onSnapshot(
+      query(collection(db, 'pricing'), orderBy('setAt', 'desc')),
+      snap => {
+        if (!snap.empty) setCurrentPrice(snap.docs[0].data());
+      }
+    );
+    return unsub;
+  }, []);
 
   // On native Android, also hydrate from Capacitor Preferences (storageGet is async)
   useEffect(() => {
@@ -301,6 +313,7 @@ export default function App() {
           onUpdateSettings={updateSettings}
           user={{ ...user, stationId: userProfile?.stationId || user.uid }}
           userProfile={userProfile}
+          currentPrice={currentPrice}
         />
       </div>
 
